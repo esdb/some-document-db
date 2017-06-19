@@ -7,6 +7,8 @@ import (
 	"github.com/json-iterator/go/require"
 	"github.com/json-iterator/go"
 	"fmt"
+	"strconv"
+	"sync/atomic"
 )
 
 type Account struct {
@@ -92,3 +94,56 @@ func Test_update_should_not_violate_command_constraint(t *testing.T) {
 	should.Nil(accounts.Create(conn, accountId, &Account{}))
 	should.NotNil(accounts.Update(conn, accountId, "xxx-001", "transfer1pc", int64(-100)))
 }
+
+func Benchmark_best_case_performance(b *testing.B) {
+	// when there is no contention
+	drv := mysql.MySQLDriver{}
+	conn, err := psql.Open(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
+	if err != nil {
+		b.Error(err)
+	}
+	defer conn.Close()
+	accountId := NewID().String()
+	accounts.Create(conn, accountId, &Account{})
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		err = accounts.Update(conn, accountId, strconv.FormatInt(int64(i), 10), "transfer1pc", int64(1))
+		if err != nil {
+			b.Error(err)
+		}
+	}
+}
+
+func Benchmark_parallel_performance(b *testing.B) {
+	// when there is no contention
+	drv := mysql.MySQLDriver{}
+	pool := psql.NewPool(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro", 32)
+	conn, err := pool.Borrow()
+	if err != nil {
+		b.Error(err)
+	}
+	accountId := NewID().String()
+	accounts.Create(conn, accountId, &Account{})
+	conn.Close()
+	b.ReportAllocs()
+	var success uint64
+	var failure uint64
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			commandId := NewID().String()
+			conn, err := pool.Borrow()
+			if err != nil {
+				b.Error(err)
+			}
+			err = accounts.Update(conn, accountId, commandId, "transfer1pc", int64(1))
+			if err != nil {
+				atomic.AddUint64(&success, 1)
+			} else {
+				atomic.AddUint64(&failure, 1)
+			}
+			conn.Close()
+		}
+	})
+	fmt.Println(success, failure)
+}
+
