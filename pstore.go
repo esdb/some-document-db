@@ -20,6 +20,11 @@ type entityStore struct {
 	decodeState       DecodeState
 }
 
+type worker struct {
+	store       *entityStore
+	entityCache map[string]*Entity
+}
+
 func StoreOf(entityName string) *entityStore {
 	return ConfigDefault.StoreOf(entityName)
 }
@@ -86,11 +91,16 @@ func (store *entityStore) Get(conn *psql.Conn, entityId string) (*Entity, error)
 	return entity, nil
 }
 
-func (store *entityStore) Create(conn *psql.Conn, entityId string, request []byte) ([]byte, error) {
-	return store.Update(conn, entityId, "create", "create", request)
+func (store *entityStore) StartWorker() *worker {
+	return &worker{store: store, entityCache: map[string]*Entity{}}
 }
 
-func (store *entityStore) Update(conn *psql.Conn, entityId string, commandId string, commandName string, request []byte) (response []byte, err error) {
+func (worker *worker) Create(conn *psql.Conn, entityId string, request []byte) ([]byte, error) {
+	return worker.Update(conn, entityId, "create", "create", request)
+}
+
+func (worker *worker) Update(conn *psql.Conn, entityId string, commandId string, commandName string, request []byte) (response []byte, err error) {
+	store := worker.store
 	handleCommand := store.commandHandlers[commandName]
 	if handleCommand == nil {
 		return nil, fmt.Errorf("no handler defined for command: %v", commandName)
@@ -104,9 +114,13 @@ func (store *entityStore) Update(conn *psql.Conn, entityId string, commandId str
 			State:     nil,
 		}
 	} else {
-		entity, err = store.Get(conn, entityId)
-		if err != nil {
-			return nil, err
+		entity = worker.entityCache[entityId]
+		if entity == nil {
+			entity, err = store.Get(conn, entityId)
+			if err != nil {
+				return nil, err
+			}
+			worker.entityCache[entityId] = entity
 		}
 	}
 	response, newState, err := handleCommand(store.cfg.jsonApi, request, entity.State)
@@ -130,19 +144,26 @@ func (store *entityStore) Update(conn *psql.Conn, entityId string, commandId str
 		"request", request,
 		"response", response,
 		"state", newStateJson)
-	if insertErr != nil {
-		stmt := conn.Statement(store.getEventSql)
-		defer stmt.Close()
-		rows, err := stmt.Query("entity_id", entityId, "command_id", commandId)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-		err = rows.Next()
-		if err == nil {
-			response := rows.GetByteArray(rows.C("response"))
-			return response, nil
-		}
+	if insertErr == nil {
+		entity.State = newState
+		entity.StateJson = newStateJson
+		entity.Version += 1
+		worker.entityCache[entityId] = entity
+		return response, nil
 	}
-	return response, insertErr
+	// the cache might be stale, in case other contention worker
+	delete(worker.entityCache, entityId)
+	stmt := conn.Statement(store.getEventSql)
+	defer stmt.Close()
+	rows, err := stmt.Query("entity_id", entityId, "command_id", commandId)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	err = rows.Next()
+	if err == nil {
+		response := rows.GetByteArray(rows.C("response"))
+		return response, nil
+	}
+	return nil, insertErr
 }

@@ -7,6 +7,8 @@ import (
 	"github.com/json-iterator/go/require"
 	"github.com/json-iterator/go"
 	"fmt"
+	"strconv"
+	"time"
 )
 
 type Account struct {
@@ -60,7 +62,7 @@ func Test_create(t *testing.T) {
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
-	_, err = accounts.Create(conn, accountId, nil)
+	_, err = accounts.StartWorker().Create(conn, accountId, nil)
 	should.Nil(err)
 	account, err := accounts.Get(conn, accountId)
 	should.Nil(err)
@@ -74,9 +76,9 @@ func Test_create_should_be_idempotent(t *testing.T) {
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
-	_, err = accounts.Create(conn, accountId, nil)
+	_, err = accounts.StartWorker().Create(conn, accountId, nil)
 	should.Nil(err)
-	_, err = accounts.Create(conn, accountId, nil)
+	_, err = accounts.StartWorker().Create(conn, accountId, nil)
 	should.Nil(err)
 }
 
@@ -87,9 +89,9 @@ func Test_update(t *testing.T) {
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
-	_, err = accounts.Create(conn, accountId, nil)
+	_, err = accounts.StartWorker().Create(conn, accountId, nil)
 	should.Nil(err)
-	response, err := accounts.Update(conn, accountId, "xxx-001", "transfer1pc", []byte("100"))
+	response, err := accounts.StartWorker().Update(conn, accountId, "xxx-001", "transfer1pc", []byte("100"))
 	should.Nil(err)
 	should.Equal(0, jsoniter.Get(response, "errno").ToInt())
 	account, err := accounts.Get(conn, accountId)
@@ -104,12 +106,12 @@ func Test_update_should_be_idempotent(t *testing.T) {
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
-	_, err = accounts.Create(conn, accountId, nil)
+	_, err = accounts.StartWorker().Create(conn, accountId, nil)
 	should.Nil(err)
-	response, err := accounts.Update(conn, accountId, "xxx-001", "transfer1pc", []byte("100"))
+	response, err := accounts.StartWorker().Update(conn, accountId, "xxx-001", "transfer1pc", []byte("100"))
 	should.Nil(err)
 	should.Equal(0, jsoniter.Get(response, "Errno").MustBeValid().ToInt())
-	response, err = accounts.Update(conn, accountId, "xxx-001", "transfer1pc", []byte("100"))
+	response, err = accounts.StartWorker().Update(conn, accountId, "xxx-001", "transfer1pc", []byte("100"))
 	should.Nil(err)
 	should.Equal(0, jsoniter.Get(response, "Errno").MustBeValid().ToInt())
 }
@@ -121,29 +123,32 @@ func Test_update_should_not_violate_command_constraint(t *testing.T) {
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
-	_, err = accounts.Create(conn, accountId, nil)
+	_, err = accounts.StartWorker().Create(conn, accountId, nil)
 	should.Nil(err)
-	response, err := accounts.Update(conn, accountId, "xxx-001", "transfer1pc", []byte("-100"))
+	response, err := accounts.StartWorker().Update(conn, accountId, "xxx-001", "transfer1pc", []byte("-100"))
 	should.Nil(err)
 	should.Equal(1, jsoniter.Get(response, "Errno").MustBeValid().ToInt())
 }
 
-//func Benchmark_best_case_performance(b *testing.B) {
-//	// when there is no contention
-//	drv := mysql.MySQLDriver{}
-//	conn, err := psql.Open(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
-//	if err != nil {
-//		b.Error(err)
-//	}
-//	defer conn.Close()
-//	accountId := NewID().String()
-//	accounts.Create(conn, accountId, &Account{})
-//	b.ReportAllocs()
-//	for i := 0; i < b.N; i++ {
-//		err = accounts.Update(conn, accountId, strconv.FormatInt(int64(i), 10), "transfer1pc", int64(1))
-//		if err != nil {
-//			b.Error(err)
-//		}
-//	}
-//}
+func Test_10000_run(t *testing.T) {
+	// when there is no contention
+	drv := mysql.MySQLDriver{}
+	conn, err := psql.Open(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
+	if err != nil {
+		t.Error(err)
+	}
+	defer conn.Close()
+	accountId := NewID().String()
+	worker := accounts.StartWorker()
+	worker.Create(conn, accountId, nil)
+	before := time.Now()
+	for i := 0; i < 20000; i++ {
+		_, err = worker.Update(conn, accountId, strconv.FormatInt(int64(i), 10), "transfer1pc", []byte("1"))
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	after := time.Now()
+	fmt.Println(20000 / after.Sub(before).Seconds())
+}
 
