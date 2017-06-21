@@ -22,9 +22,10 @@ The goal is to build a document database that will have these two parts acting a
 * Handle update in a idempotent way: free user from doing this hard work himself
 * Keep business rule on data integrity: it should work like database unique constraint.
 * High performance on concurrent update to same entity: more than 10k tps on same entity 
+* View can be easily implemented: do not impose limit on view storage, mysql/redis/elasticsearch they all can be view storage.
 * Reliable view update: the view can not have loss update, every change should be synchronized
 * Low latency view update: if user want, the view can be updated in the same request handing the main storage
-* Long term stability: historic data should be archived properly
+* Long term stability: historic data should be automatically archived properly
 
 # Main storage correctness
 
@@ -103,7 +104,7 @@ func (worker *worker) fetchCommands() []*command {
 
 The sharding is done by this simple logic:
 
-* use etcd to elect one server as the leader
+* use etcd to elect one server as the leader: this is optional, we can choose to use a static topology
 * every server keep a heart beat to the elected leader
 * when doing heart beat, leader will piggy back the latest shard allocation, every server locally cache it
 * any request can hit any server, the server will redirect it to the right shard
@@ -111,7 +112,9 @@ The sharding is done by this simple logic:
 
 The key design decisions are:
  
-* we only use etcd to elect a leader, we do not use it to allocate shard
+* we only use etcd to elect a leader, we do not use it to allocate shard. 
+losing leader will not stop the traffic. only the topology is no longer the latest, 
+which might result in more lock contention.
 * request will only be redirected once, there is no harm when two servers are handling same shard, 
 only performance will be downgraded (due to optimistic lock contention)
 * every server is both "gateway" and "command handler"
@@ -136,3 +139,24 @@ If one event has already been applied, we skip it.
 
 Having a separate view updater run in the background every 100ms, 
 we can ensure we do not lose the update on the view side.
+However, the table polling will result in high latency.
+
+# Low latency view update
+
+We allow synchronous view update directly from command handler, for latency sensitive view. 
+When a command is committed, the view update is done immediately afterwards by same worker goroutine.
+This way we can cut down the hand over time to nearly zero, there is no queue can beat this.
+However, there things to care about 
+
+* update view directly from command handler means there will be concurrent updates.
+* update view might fail.
+
+The concurrent update will be handled by the optimistic lock on the view side, same as view updater retry.
+Update view might fail. We might lose update if only rely on direct update from command handler.
+Luckily, we have separate view updater working in "pull" mode to ensure integrity.
+It is just like a patch for "push" mode view update.
+
+# Closing thought
+
+Both the main storage and views are built upon optimistic lock. 
+And sharding & queueing is a optimization to reduce the lock contention.
