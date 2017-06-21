@@ -5,10 +5,11 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/v2pro/psql"
 	"github.com/json-iterator/go/require"
-	"github.com/json-iterator/go"
 	"fmt"
-	"strconv"
+	"github.com/json-iterator/go"
 	"time"
+	"strconv"
+	"database/sql/driver"
 )
 
 type Account struct {
@@ -22,36 +23,36 @@ type ResponseMessage struct {
 }
 
 var accounts = StoreOf("account").
-	DecodeState(
-	func(jsonApi jsoniter.Api, stateJson []byte) (interface{}, error) {
-		var account Account
-		err := jsonApi.Unmarshal(stateJson, &account)
-		return account, err
+	StateType(
+	func() interface{} {
+		return &Account{}
 	}).
 	Command("create",
-	func(jsonApi jsoniter.Api, request []byte, state interface{}) (response []byte, newState interface{}, err error) {
-		response, err = jsonApi.Marshal(ResponseMessage{
+	func() interface{} { return nil },
+	func(request interface{}, state interface{}) (response interface{}, newState interface{}, err error) {
+		return ResponseMessage{
 			Errno: 0,
-		})
-		return response, Account{}, nil
+		}, &Account{}, nil
 	}).
 	Command("transfer1pc",
-	func(jsonApi jsoniter.Api, request []byte, state interface{}) (response []byte, newState interface{}, err error) {
-		amount := jsonApi.Get(request).ToInt64()
-		account := state.(Account)
+	func() interface{} {
+		var val int64
+		return &val
+	},
+	func(request interface{}, state interface{}) (response interface{}, newState interface{}, err error) {
+		amount := *(request.(*int64))
+		account := state.(*Account)
 		oldBalance := account.UsableBalance
 		account.UsableBalance += amount
 		if account.UsableBalance < 0 {
-			response, err = jsonApi.Marshal(ResponseMessage{
+			return ResponseMessage{
 				Errno:  1,
 				Errmsg: fmt.Sprintf("account balance can not be negative: %v => %v", oldBalance, account.UsableBalance),
-			})
-			return response, nil, err
+			}, nil, err
 		} else {
-			response, err = jsonApi.Marshal(ResponseMessage{
+			return ResponseMessage{
 				Errno: 0,
-			})
-			return response, account, err
+			}, account, err
 		}
 	})
 
@@ -62,11 +63,41 @@ func Test_create(t *testing.T) {
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
-	_, err = accounts.StartWorker().Create(conn, accountId, nil)
+	worker := accounts.StartWorker(conn)
+	_, err = worker.Handle(accountId, "create", "create", nil)
 	should.Nil(err)
 	account, err := accounts.Get(conn, accountId)
 	should.Nil(err)
 	should.Equal(accountId, account.EntityId)
+}
+
+func Test_batch_insert(t *testing.T) {
+	drv := mysql.MySQLDriver{}
+	conn, _ := psql.Open(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
+	rows := []driver.Value{
+		psql.BatchInsertRow(
+			"entity_id", "b555t48t87413c8g6kgg",
+			"version", int64(1),
+			"command_id", "create1",
+			"command_name", "create1",
+			"request", "{}",
+			"response", "{}",
+			"state", "{}"),
+		psql.BatchInsertRow(
+			"entity_id", "b555t48t87413c8g6kgg",
+			"version", int64(2),
+			"command_id", "create2",
+			"command_name", "create2",
+			"request", "{}",
+			"response", "{}",
+			"state", "{}"),
+	}
+	stmt := conn.TranslateStatement("INSERT account :BATCH_INSERT_COLUMNS",
+		psql.BatchInsertColumns(len(rows),
+			"entity_id", "version", "command_id", "command_name", "request", "response", "state"))
+	defer stmt.Close()
+	_, err := stmt.Exec(rows...)
+	fmt.Println(err)
 }
 
 func Test_create_should_be_idempotent(t *testing.T) {
@@ -76,9 +107,10 @@ func Test_create_should_be_idempotent(t *testing.T) {
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
-	_, err = accounts.StartWorker().Create(conn, accountId, nil)
+	worker := accounts.StartWorker(conn)
+	_, err = worker.Handle(accountId, "create", "create", nil)
 	should.Nil(err)
-	_, err = accounts.StartWorker().Create(conn, accountId, nil)
+	_, err = worker.Handle(accountId, "create", "create", nil)
 	should.Nil(err)
 }
 
@@ -89,15 +121,17 @@ func Test_update(t *testing.T) {
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
-	_, err = accounts.StartWorker().Create(conn, accountId, nil)
+	worker := accounts.StartWorker(conn)
+	_, err = worker.Handle(accountId, "create", "create", nil)
 	should.Nil(err)
-	response, err := accounts.StartWorker().Update(conn, accountId, "xxx-001", "transfer1pc", []byte("100"))
+	response, err := worker.Handle(accountId, "xxx-001", "transfer1pc", []byte("100"))
 	should.Nil(err)
 	should.Equal(0, jsoniter.Get(response, "errno").ToInt())
 	account, err := accounts.Get(conn, accountId)
 	should.Nil(err)
-	should.Equal(int64(100), account.State.(Account).UsableBalance)
+	should.Equal(int64(100), account.State.(*Account).UsableBalance)
 }
+
 
 func Test_update_should_be_idempotent(t *testing.T) {
 	should := require.New(t)
@@ -106,12 +140,13 @@ func Test_update_should_be_idempotent(t *testing.T) {
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
-	_, err = accounts.StartWorker().Create(conn, accountId, nil)
+	worker := accounts.StartWorker(conn)
+	_, err = worker.Handle(accountId, "create", "create", nil)
 	should.Nil(err)
-	response, err := accounts.StartWorker().Update(conn, accountId, "xxx-001", "transfer1pc", []byte("100"))
+	response, err := worker.Handle(accountId, "xxx-001", "transfer1pc", []byte("100"))
 	should.Nil(err)
 	should.Equal(0, jsoniter.Get(response, "Errno").MustBeValid().ToInt())
-	response, err = accounts.StartWorker().Update(conn, accountId, "xxx-001", "transfer1pc", []byte("100"))
+	response, err = worker.Handle(accountId, "xxx-001", "transfer1pc", []byte("100"))
 	should.Nil(err)
 	should.Equal(0, jsoniter.Get(response, "Errno").MustBeValid().ToInt())
 }
@@ -123,9 +158,10 @@ func Test_update_should_not_violate_command_constraint(t *testing.T) {
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
-	_, err = accounts.StartWorker().Create(conn, accountId, nil)
+	worker := accounts.StartWorker(conn)
+	_, err = worker.Handle(accountId, "create", "create", nil)
 	should.Nil(err)
-	response, err := accounts.StartWorker().Update(conn, accountId, "xxx-001", "transfer1pc", []byte("-100"))
+	response, err := worker.Handle(accountId, "xxx-001", "transfer1pc", []byte("-100"))
 	should.Nil(err)
 	should.Equal(1, jsoniter.Get(response, "Errno").MustBeValid().ToInt())
 }
@@ -139,16 +175,22 @@ func Test_10000_run(t *testing.T) {
 	}
 	defer conn.Close()
 	accountId := NewID().String()
-	worker := accounts.StartWorker()
-	worker.Create(conn, accountId, nil)
+	worker := accounts.StartWorker(conn)
+	worker.Handle(accountId, "create", "create", nil)
 	before := time.Now()
-	for i := 0; i < 20000; i++ {
-		_, err = worker.Update(conn, accountId, strconv.FormatInt(int64(i), 10), "transfer1pc", []byte("1"))
-		if err != nil {
-			t.Error(err)
+	responsePromises := []chan interface{}{}
+	for i := 0; i < 1000000; i++ {
+		responsePromise := worker.HandleAsync(accountId, strconv.FormatInt(int64(i), 10), "transfer1pc", []byte("1"))
+		responsePromises = append(responsePromises, responsePromise)
+	}
+	success := 0
+	for _, responsePromise := range responsePromises {
+		resp := <-responsePromise
+		_, ok := resp.([]byte)
+		if ok {
+			success++
 		}
 	}
 	after := time.Now()
-	fmt.Println(20000 / after.Sub(before).Seconds())
+	fmt.Println(1000000 / after.Sub(before).Seconds())
 }
-
