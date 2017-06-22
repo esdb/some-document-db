@@ -1,4 +1,4 @@
-![quokka](/quokka.png){:height="50%" width="50%"}
+![quokka](/quokka.png | width=100)
 
 # quokka
 
