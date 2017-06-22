@@ -1,15 +1,18 @@
 package quokka
 
-import "github.com/json-iterator/go"
+import (
+	"github.com/v2pro/plz"
+	_ "github.com/v2pro/lego/jsoniter_adapter"
+)
 
 type Config struct {
-	JsonApi  jsoniter.Api
+	JsonApi  plz.Codec
 	HttpAddr string
 }
 
 type frozenConfig struct {
 	configBeforeFrozen Config
-	jsonApi            jsoniter.Api
+	jsonApi            plz.Codec
 	httpAddr           string
 }
 
@@ -18,7 +21,7 @@ func (cfg Config) Froze() *frozenConfig {
 		cfg.HttpAddr = ":9000"
 	}
 	if cfg.JsonApi == nil {
-		cfg.JsonApi = jsoniter.ConfigDefault
+		cfg.JsonApi = plz.CodecOf["json"]
 	}
 	return &frozenConfig{cfg, cfg.JsonApi, cfg.HttpAddr}
 }
