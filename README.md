@@ -1,3 +1,5 @@
+![quokka](/quokka.png)
+
 # quokka
 
 document database built on top of mysql
