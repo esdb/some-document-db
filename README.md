@@ -1,6 +1,6 @@
-<img src="quokka.png" width="250">
-
 # quokka
+
+<img src="quokka.png" width="250">
 
 document database built on top of mysql
 
