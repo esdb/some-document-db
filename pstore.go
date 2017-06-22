@@ -1,4 +1,4 @@
-package pstore
+package quokka
 
 import (
 	"github.com/v2pro/psql"

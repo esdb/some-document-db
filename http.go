@@ -1,4 +1,4 @@
-package pstore
+package quokka
 
 import "net/http"
 
