@@ -1,4 +1,4 @@
-![quokka](/quokka.png)
+![quokka](/quokka.png =120x120)
 
 # quokka
 
