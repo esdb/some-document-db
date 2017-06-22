@@ -1,4 +1,4 @@
-<img src="quokka.png" width="120">
+<img src="quokka.png" width="250">
 
 # quokka
 
