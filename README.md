@@ -1,4 +1,4 @@
-![quokka](/quokka.png | width=100)
+<img src="quokka.png" width="120">
 
 # quokka
 
