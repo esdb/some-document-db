@@ -4,9 +4,16 @@ import (
 	"time"
 	"fmt"
 	"database/sql/driver"
-	"runtime/debug"
 	"github.com/v2pro/plz/sql"
+	"github.com/v2pro/plz"
+	"github.com/v2pro/plz/log"
+	_ "github.com/v2pro/quokka/bootstrap"
 )
+
+var errorLogger = plz.Logger("type", "error")
+var receivedCommand = plz.Logger("metric", "received")
+var fetchedCommands = plz.Logger("metric", "fetched")
+var batchProcessedCommands = plz.Logger("metric", "batch_processed")
 
 type HandleCommand func(request interface{}, state interface{}) (response interface{}, newState interface{}, err error)
 
@@ -26,15 +33,16 @@ type command struct {
 	commandId       string
 	commandName     string
 	request         []byte
-	replied         string
+	replied         bool
 	responsePromise chan interface{}
 }
 
 func (cmd *command) reply(response interface{}) {
-	if cmd.replied != "" {
-		panic("already replied: " + cmd.replied)
+	if cmd.replied {
+		errorLogger.Error("already replied")
+		return
 	}
-	cmd.replied = string(debug.Stack())
+	cmd.replied = true
 	cmd.responsePromise <- response
 }
 
@@ -132,6 +140,10 @@ func (store *entityStore) StartWorker(conn sql.Conn) *worker {
 }
 
 func (worker *worker) HandleAsync(entityId string, commandId string, commandName string, request []byte) chan interface{} {
+	if receivedCommand.ShouldLog(log.LEVEL_DEBUG) {
+		receivedCommand.Debug("received command",
+			"command_name", commandName)
+	}
 	responsePromise := make(chan interface{}, 1)
 	command := &command{
 		entityId:        entityId,
@@ -160,18 +172,26 @@ func (worker *worker) Handle(entityId string, commandId string, commandName stri
 func (worker *worker) work() {
 	for {
 		commands := worker.fetchCommands()
-		fmt.Println("fetched", len(commands))
+		fetchedCommands.Info("fetched commands", "count", len(commands))
 		if len(commands) == 0 {
 			time.Sleep(time.Second)
 		} else {
 			err := worker.batchProcess(commands)
 			if err != nil {
+				batchProcessedCommands.Error("batch failure",
+					"count", len(commands),
+					"code", "failure",
+					"error", err)
 				for _, cmd := range commands {
 					err := worker.batchProcess([]*command{cmd})
 					if err != nil {
 						cmd.reply(err)
 					}
 				}
+			} else {
+				batchProcessedCommands.Info("batch success",
+					"count", len(commands),
+					"code", "success")
 			}
 		}
 	}
