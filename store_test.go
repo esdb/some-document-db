@@ -11,6 +11,7 @@ import (
 	"database/sql/driver"
 	"github.com/v2pro/plz"
 	_ "github.com/v2pro/dingo"
+	"github.com/v2pro/plz/sql"
 )
 
 type Account struct {
@@ -60,7 +61,7 @@ var accounts = StoreOf("account").
 func Test_create(t *testing.T) {
 	should := require.New(t)
 	drv := mysql.MySQLDriver{}
-	conn, err := plz.SqlOpen(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
+	conn, err := plz.OpenSqlConn(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
@@ -74,9 +75,9 @@ func Test_create(t *testing.T) {
 
 func Test_batch_insert(t *testing.T) {
 	drv := mysql.MySQLDriver{}
-	conn, _ := plz.SqlOpen(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
+	conn, _ := plz.OpenSqlConn(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
 	rows := []driver.Value{
-		plz.BatchInsertRow(
+		sql.BatchInsertRow(
 			"entity_id", "b555t48t87413c8g6kgg",
 			"version", int64(1),
 			"command_id", "create1",
@@ -84,7 +85,7 @@ func Test_batch_insert(t *testing.T) {
 			"request", "{}",
 			"response", "{}",
 			"state", "{}"),
-		plz.BatchInsertRow(
+		sql.BatchInsertRow(
 			"entity_id", "b555t48t87413c8g6kgg",
 			"version", int64(2),
 			"command_id", "create2",
@@ -94,7 +95,7 @@ func Test_batch_insert(t *testing.T) {
 			"state", "{}"),
 	}
 	stmt := conn.TranslateStatement("INSERT account :BATCH_INSERT_COLUMNS",
-		plz.BatchInsertColumns(len(rows),
+		sql.BatchInsertColumns(len(rows),
 			"entity_id", "version", "command_id", "command_name", "request", "response", "state"))
 	defer stmt.Close()
 	_, err := stmt.Exec(rows...)
@@ -104,7 +105,7 @@ func Test_batch_insert(t *testing.T) {
 func Test_create_should_be_idempotent(t *testing.T) {
 	should := require.New(t)
 	drv := mysql.MySQLDriver{}
-	conn, err := plz.SqlOpen(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
+	conn, err := plz.OpenSqlConn(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
@@ -118,7 +119,7 @@ func Test_create_should_be_idempotent(t *testing.T) {
 func Test_update(t *testing.T) {
 	should := require.New(t)
 	drv := mysql.MySQLDriver{}
-	conn, err := plz.SqlOpen(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
+	conn, err := plz.OpenSqlConn(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
@@ -137,7 +138,7 @@ func Test_update(t *testing.T) {
 func Test_update_should_be_idempotent(t *testing.T) {
 	should := require.New(t)
 	drv := mysql.MySQLDriver{}
-	conn, err := plz.SqlOpen(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
+	conn, err := plz.OpenSqlConn(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
@@ -155,7 +156,7 @@ func Test_update_should_be_idempotent(t *testing.T) {
 func Test_update_should_not_violate_command_constraint(t *testing.T) {
 	should := require.New(t)
 	drv := mysql.MySQLDriver{}
-	conn, err := plz.SqlOpen(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
+	conn, err := plz.OpenSqlConn(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
 	should.Nil(err)
 	defer conn.Close()
 	accountId := NewID().String()
@@ -170,7 +171,7 @@ func Test_update_should_not_violate_command_constraint(t *testing.T) {
 func Test_10000_run(t *testing.T) {
 	// when there is no contention
 	drv := mysql.MySQLDriver{}
-	conn, err := plz.SqlOpen(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
+	conn, err := plz.OpenSqlConn(drv, "root:123456@tcp(127.0.0.1:3306)/v2pro")
 	if err != nil {
 		t.Error(err)
 	}

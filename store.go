@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"database/sql/driver"
 	"runtime/debug"
-	"github.com/v2pro/plz"
+	"github.com/v2pro/plz/sql"
 )
 
 type HandleCommand func(request interface{}, state interface{}) (response interface{}, newState interface{}, err error)
@@ -13,9 +13,9 @@ type HandleCommand func(request interface{}, state interface{}) (response interf
 type entityStore struct {
 	cfg                 *frozenConfig
 	entityName          string
-	insertSql           plz.TranslatedSql
-	getLatestStateSql   plz.TranslatedSql
-	getEventSql         plz.TranslatedSql
+	insertSql           sql.Translated
+	getLatestStateSql   sql.Translated
+	getEventSql         sql.Translated
 	commandHandlers     map[string]HandleCommand
 	commandRequestTypes map[string]func() interface{}
 	stateType           func() interface{}
@@ -46,7 +46,7 @@ func (cmd *command) delayReply(response interface{}) func() {
 
 type worker struct {
 	store       *entityStore
-	conn        plz.SqlConn
+	conn        sql.Conn
 	commandQ    chan *command
 	entityCache map[string]*Entity
 }
@@ -56,12 +56,12 @@ func StoreOf(entityName string) *entityStore {
 }
 
 func (cfg *frozenConfig) StoreOf(entityName string) *entityStore {
-	insertSql := plz.TranslateSql(
+	insertSql := sql.Translate(
 		"INSERT "+entityName+" :INSERT_COLUMNS",
 		"entity_id", "version", "command_id", "command_name", "request", "response", "state")
-	getLatestStateSql := plz.TranslateSql(
+	getLatestStateSql := sql.Translate(
 		"SELECT * FROM " + entityName + " WHERE entity_id=:entity_id ORDER BY version DESC LIMIT 1")
-	getEventSql := plz.TranslateSql(
+	getEventSql := sql.Translate(
 		"SELECT * FROM " + entityName + " WHERE entity_id=:entity_id AND command_id=:command_id")
 	return &entityStore{
 		cfg:                 cfg,
@@ -93,7 +93,7 @@ type Entity struct {
 	UpdatedAt time.Time
 }
 
-func (store *entityStore) Get(conn plz.SqlConn, entityId string) (*Entity, error) {
+func (store *entityStore) Get(conn sql.Conn, entityId string) (*Entity, error) {
 	stmt := conn.Statement(store.getLatestStateSql)
 	defer stmt.Close()
 	rows, err := stmt.Query("entity_id", entityId)
@@ -121,7 +121,7 @@ func (store *entityStore) Get(conn plz.SqlConn, entityId string) (*Entity, error
 	return entity, nil
 }
 
-func (store *entityStore) StartWorker(conn plz.SqlConn) *worker {
+func (store *entityStore) StartWorker(conn sql.Conn) *worker {
 	worker := &worker{
 		store:       store,
 		entityCache: map[string]*Entity{},
@@ -214,7 +214,7 @@ func (worker *worker) batchProcess(commands []*command) (err error) {
 		return nil
 	}
 	stmt := worker.conn.TranslateStatement("INSERT "+worker.store.entityName+" :BATCH_INSERT_COLUMNS",
-		plz.BatchInsertColumns(len(rows),
+		sql.BatchInsertColumns(len(rows),
 			"entity_id", "version", "command_id", "command_name", "request", "response", "state"))
 	defer stmt.Close()
 	_, insertErr := stmt.Exec(rows...)
@@ -300,7 +300,7 @@ func (worker *worker) tryHandleOne(command *command) (row []driver.Value, respon
 			return nil, nil, err
 		}
 	}
-	row = plz.BatchInsertRow(
+	row = sql.BatchInsertRow(
 		"entity_id", entityId,
 		"version", entity.Version+1,
 		"command_id", commandId,
